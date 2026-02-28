@@ -2,7 +2,7 @@
 
 М6О-107бв-25
 
-питон
+python
 
-
+https://gitlab.mai.ru/AATyutyunnik/pioa_task1.gi
 
