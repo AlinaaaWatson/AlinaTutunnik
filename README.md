@@ -4,5 +4,7 @@
 
 python
 
-https://gitlab.mai.ru/AATyutyunnik/pioa_task1.gi
+https://gitlab.mai.ru/AATyutyunnik/pioa_task1.git
+
+
 
