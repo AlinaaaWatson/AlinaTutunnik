@@ -1,6 +1,7 @@
 from src.db.backend.memory import (create_record, select_record, update_record, delete_record,
     create_table, list_tables, get_table
 )
+from src.db.backend.errors import InvalidAgeError, DuplicateIDError, StudentTableError
 
 
 def _print_menu() -> None:
@@ -11,8 +12,8 @@ def _print_menu() -> None:
     print("3. Найти записи по фильтру")
     print("4. Обновить запись")
     print("5. Удалить запись")
-    print("6. Создать новую таблицу")  # =
-    print("7. Показать все таблицы") # =
+    print("6. Создать новую таблицу") 
+    print("7. Показать все таблицы") 
     print("0. Выход")
 
 
@@ -71,7 +72,7 @@ def _add_student() -> None:
         # В случае успешного добавления запись выводится в консоль.
         print(f"Запись добавлена: {record}")
 
-    except ValueError as exc:
+    except (ValueError, DuplicateIDError, InvalidAgeError) as exc:
         # Обработка ошибок валидации.
         print(f"Ошибка: {exc}")
 
@@ -164,9 +165,10 @@ def _update_student() -> None:
             print(f"✓ Запись обновлена: {updated}")
         else:
             print("✗ Не удалось обновить запись (запись не найдена)")
-    except ValueError as exc:
-        print(f"✗ Ошибка валидации: {exc}")
-
+    except InvalidAgeError as exc:
+        print(f"✗ Ошибка валидации возраста: {exc}")
+    except StudentTableError as exc:
+        print(f"✗ Ошибка базы данных: {exc}")
 
 def _delete_student() -> None:
     """Удаление студента"""
@@ -191,6 +193,7 @@ def _delete_student() -> None:
             print(f"✗ Не удалось удалить запись")
     else:
         print("Удаление отменено")
+
 def run() -> None:
     """
     Запускает основной цикл текстового пользовательского интерфейса.
@@ -228,7 +231,6 @@ def run() -> None:
 
         elif action == '7':  # НОВЫЙ ПУНКТ
             _show_tables()
-
 
         elif action == "0":
             # Завершение работы программы.
