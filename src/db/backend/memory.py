@@ -1,199 +1,217 @@
-# src/db/backend/memory.py
-from typing import Optional, List, Tuple, Dict, Any
-from .errors import StudentTableError, DuplicateIDError, InvalidAgeError
+"""Backend для работы с таблицами в памяти"""
+from typing import Optional, List, Dict, Any
+from .errors import DuplicateIDError, InvalidAgeError, RecordNotFoundError
 
-# Type aliases
-StudentRecord = Tuple[int, str, str, int, str]
+
+class Record:
+    """Класс для одной записи"""
+    
+    def __init__(self, record_id: int, data: Dict[str, Any]):
+        self.id = record_id
+        self.data = data.copy()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Преобразует запись в словарь"""
+        return {'id': self.id, **self.data}
+    
+    def __getitem__(self, key: str) -> Any:
+        """Позволяет обращаться как record['field']"""
+        if key == 'id':
+            return self.id
+        return self.data.get(key)
+    
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Позволяет устанавливать значение как record['field'] = value"""
+        if key == 'id':
+            self.id = value
+        else:
+            self.data[key] = value
+    
+    def __repr__(self) -> str:
+        return f"Record(id={self.id}, data={self.data})"
 
 
 class Table:
-    """Базовый класс для всех таблиц"""
+    """Базовый класс таблицы с полной CRUD функциональностью"""
     
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str):
         self.name = name
-        self._records: List[Tuple] = []
+        self._records: Dict[int, Record] = {}
+        self._next_id = 1
     
-    def all(self) -> List[Tuple]:
-        """Возвращает копию всех записей"""
-        return self._records.copy()
+    def __len__(self) -> int:
+        """Поддержка len(table)"""
+        return len(self._records)
+    
+    def __iter__(self):
+        """Поддержка итерации по таблице"""
+        return iter(self._records.values())
+    
+    def all(self) -> List[Record]:
+        """Вернуть все записи"""
+        return list(self._records.values())
     
     def count(self) -> int:
-        """Возвращает количество записей"""
+        """Вернуть количество записей"""
         return len(self._records)
     
     def clear(self) -> None:
-        """Очищает таблицу"""
+        """Очистить таблицу"""
         self._records.clear()
+        self._next_id = 1
+    
+    def insert(self, data: Dict[str, Any]) -> Record:
+        """
+        Добавить новую запись
+        
+        Args:
+            data: Словарь с данными записи
+            
+        Returns:
+            Созданная запись
+        """
+        record_id = self._next_id
+        self._next_id += 1
+        record = Record(record_id, data)
+        self._records[record_id] = record
+        return record
+    
+    def get(self, record_id: int) -> Optional[Record]:
+        """
+        Получить запись по ID
+        
+        Args:
+            record_id: ID записи
+            
+        Returns:
+            Запись или None если не найдена
+        """
+        return self._records.get(record_id)
+    
+    def update(self, record_id: int, data: Dict[str, Any]) -> Record:
+        """
+        Обновить запись
+        
+        Args:
+            record_id: ID записи для обновления
+            data: Новые данные (будут объединены с существующими)
+            
+        Returns:
+            Обновленная запись
+            
+        Raises:
+            RecordNotFoundError: Если запись не найдена
+        """
+        if record_id not in self._records:
+            raise RecordNotFoundError(f"Запись с ID {record_id} не найдена")
+        
+        record = self._records[record_id]
+        record.data.update(data)
+        return record
+    
+    def delete(self, record_id: int) -> bool:
+        """
+        Удалить запись
+        
+        Args:
+            record_id: ID записи для удаления
+            
+        Returns:
+            True если запись удалена, False если не найдена
+        """
+        if record_id in self._records:
+            del self._records[record_id]
+            return True
+        return False
+    
+    def find(self, **kwargs) -> List[Record]:
+        """
+        Найти записи по критериям
+        
+        Args:
+            **kwargs: Поля и значения для поиска (например, name="John", age=25)
+            
+        Returns:
+            Список записей, удовлетворяющих критериям
+        """
+        results = []
+        for record in self._records.values():
+            match = True
+            for key, value in kwargs.items():
+                if record.data.get(key) != value:
+                    match = False
+                    break
+            if match:
+                results.append(record)
+        return results
+    
+    def sort(self, field: str, reverse: bool = False) -> List[Record]:
+        """
+        Сортировка записей по полю
+        
+        Args:
+            field: Имя поля для сортировки (или 'id' для сортировки по ID)
+            reverse: False - по возрастанию, True - по убыванию
+            
+        Returns:
+            Отсортированный список записей
+        """
+        records = self.all()
+        
+        def get_key(record: Record) -> Any:
+            if field == 'id':
+                return record.id
+            return record.data.get(field)
+        
+        return sorted(records, key=get_key, reverse=reverse)
 
 
 class StudentTable(Table):
-    """Таблица студентов с CRUD операциями"""
+    """Специализированная таблица для студентов с валидацией"""
     
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__("Student")
     
-    def create_record(
-        self,
-        student_id: int,
-        first_name: str,
-        second_name: str,
-        age: int,
-        sex: str,
-    ) -> StudentRecord:
+    def insert(self, data: Dict[str, Any]) -> Record:
         """
-        Создаёт новую запись и добавляет её в таблицу Student.
+        Добавить запись студента с валидацией
         
         Args:
-            student_id: Уникальный идентификатор
-            first_name: Имя
-            second_name: Фамилия
-            age: Возраст
-            sex: Пол
+            data: Должен содержать поля: first_name, second_name, age, sex
             
         Returns:
             Созданная запись
             
         Raises:
-            InvalidAgeError: Если возраст отрицательный
-            DuplicateIDError: Если ID уже существует
+            InvalidAgeError: Если возраст некорректный
         """
-        # Проверка корректности возраста
-        if age < 0:
-            raise InvalidAgeError("Поле age не может быть отрицательным.")
+        # Валидация возраста
+        if 'age' in data:
+            age = data['age']
+            if not isinstance(age, int) or age < 0 or age > 150:
+                raise InvalidAgeError(f"Некорректный возраст: {age}")
         
-        # Проверка уникальности идентификатора
-        if any(record[0] == student_id for record in self._records):
-            raise DuplicateIDError(f"Запись с id={student_id} уже существует.")
-        
-        # Формирование и добавление новой записи
-        new_record: StudentRecord = (
-            student_id,
-            first_name.strip(),
-            second_name.strip(),
-            age,
-            sex.strip(),
-        )
-        
-        self._records.append(new_record)
-        return new_record
+        return super().insert(data)
     
-    def select_record(
-        self,
-        student_id: Optional[int] = None,
-        first_name: Optional[str] = None,
-        second_name: Optional[str] = None,
-        age: Optional[int] = None,
-        sex: Optional[str] = None,
-    ) -> List[StudentRecord]:
+    def update(self, record_id: int, data: Dict[str, Any]) -> Record:
         """
-        Выполняет выборку записей по фильтрам.
+        Обновить запись студента с валидацией
         
-        Args:
-            student_id: Фильтр по ID
-            first_name: Фильтр по имени
-            second_name: Фильтр по фамилии
-            age: Фильтр по возрасту
-            sex: Фильтр по полу
-            
-        Returns:
-            Список записей, удовлетворяющих фильтрам
-        """
-        # Если фильтры не заданы, возвращаем все записи
-        if all(param is None for param in [student_id, first_name, second_name, age, sex]):
-            return self._records.copy()
-        
-        result: List[StudentRecord] = []
-        
-        for record in self._records:
-            # Проверка соответствия каждому фильтру
-            if student_id is not None and record[0] != student_id:
-                continue
-            if first_name is not None and record[1] != first_name:
-                continue
-            if second_name is not None and record[2] != second_name:
-                continue
-            if age is not None and record[3] != age:
-                continue
-            if sex is not None and record[4] != sex:
-                continue
-            
-            result.append(record)
-        
-        return result
-    
-    def update_record(
-        self,
-        student_id: int,
-        first_name: Optional[str] = None,
-        second_name: Optional[str] = None,
-        age: Optional[int] = None,
-        sex: Optional[str] = None,
-    ) -> Optional[StudentRecord]:
-        """
-        Обновляет запись с указанным student_id.
-        
-        Args:
-            student_id: ID записи для обновления
-            first_name: Новое имя (None - не менять)
-            second_name: Новая фамилия (None - не менять)
-            age: Новый возраст (None - не менять)
-            sex: Новый пол (None - не менять)
-            
-        Returns:
-            Обновленная запись или None, если запись не найдена
-            
         Raises:
-            InvalidAgeError: Если новый возраст отрицательный
+            InvalidAgeError: Если возраст некорректный
         """
-        for i, record in enumerate(self._records):
-            if record[0] == student_id:
-                # Создаем обновленную запись
-                new_record: StudentRecord = (
-                    student_id,
-                    first_name if first_name is not None else record[1],
-                    second_name if second_name is not None else record[2],
-                    age if age is not None else record[3],
-                    sex if sex is not None else record[4],
-                )
-                
-                # Валидация нового возраста
-                if new_record[3] < 0:
-                    raise InvalidAgeError("Поле age не может быть отрицательным.")
-                
-                self._records[i] = new_record
-                return new_record
+        if 'age' in data:
+            age = data['age']
+            if not isinstance(age, int) or age < 0 or age > 150:
+                raise InvalidAgeError(f"Некорректный возраст: {age}")
         
-        return None
-    
-    def delete_record(self, student_id: int) -> bool:
-        """
-        Удаляет запись с указанным student_id.
-        
-        Args:
-            student_id: ID записи для удаления
-            
-        Returns:
-            True если запись удалена, False если не найдена
-        """
-        for i, record in enumerate(self._records):
-            if record[0] == student_id:
-                del self._records[i]
-                return True
-        
-        return False
-    
-    def get_by_id(self, student_id: int) -> Optional[StudentRecord]:
-        """Возвращает запись по ID или None, если запись не найдена"""
-        for record in self._records:
-            if record[0] == student_id:
-                return record
-        return None
+        return super().update(record_id, data)
 
 
 class Database:
     """Управление несколькими таблицами"""
     
-    def __init__(self) -> None:
+    def __init__(self):
         self._tables: Dict[str, Table] = {}
         self._init_default_tables()
     
@@ -202,18 +220,19 @@ class Database:
         self.create_table("Student")
         self.create_table("Teachers")
     
-    def create_table(self, table_name: str) -> bool:
+    def create_table(self, table_name: str) -> Table:
         """
-        Создает новую таблицу.
+        Создает новую таблицу
         
         Args:
             table_name: Имя таблицы
             
         Returns:
-            True если создана, False если уже существует
+            Созданная таблица
             
         Raises:
             ValueError: Если имя таблицы пустое
+            ValueError: Если таблица уже существует
         """
         table_name = table_name.strip()
         
@@ -221,161 +240,36 @@ class Database:
             raise ValueError("Имя таблицы не может быть пустым")
         
         if table_name in self._tables:
-            return False
+            raise ValueError(f"Таблица '{table_name}' уже существует")
         
         # Создаем соответствующую таблицу
         if table_name == "Student":
-            self._tables[table_name] = StudentTable()
+            table = StudentTable()
         else:
-            self._tables[table_name] = Table(table_name)
+            table = Table(table_name)
         
-        return True
-    
-    def list_tables(self) -> List[str]:
-        """Возвращает список всех таблиц"""
-        return list(self._tables.keys())
+        self._tables[table_name] = table
+        return table
     
     def get_table(self, table_name: str) -> Optional[Table]:
         """Возвращает таблицу по имени или None, если таблица не найдена"""
         return self._tables.get(table_name)
     
-    def get_student_table(self) -> Optional[StudentTable]:
-        """Возвращает таблицу Student (специализированный метод)"""
-        table = self._tables.get("Student")
-        if isinstance(table, StudentTable):
-            return table
-        return None
+    def list_tables(self) -> List[str]:
+        """Возвращает список всех таблиц"""
+        return list(self._tables.keys())
     
-    def delete_table(self, table_name: str) -> bool:
+    def drop_table(self, table_name: str) -> bool:
         """
-        Удаляет таблицу.
+        Удаляет таблицу
         
         Args:
             table_name: Имя таблицы для удаления
             
         Returns:
             True если удалена, False если не найдена
-            
-        Raises:
-            ValueError: Если пытаются удалить таблицу Student
         """
-        if table_name == "Student":
-            raise ValueError("Таблицу Student нельзя удалить")
-        
         if table_name in self._tables:
             del self._tables[table_name]
             return True
-        
         return False
-    
-    def clear_all(self) -> None:
-        """Очищает все таблицы (для тестов)"""
-        self._tables.clear()
-        self._init_default_tables()
-
-
-# Глобальный экземпляр базы данных (для обратной совместимости)
-_DATABASE = Database()
-
-# Функции для обратной совместимости с существующим кодом
-def get_db() -> Database:
-    """Возвращает глобальный экземпляр базы данных"""
-    return _DATABASE
-
-
-# Совместимость со старым API (функциональный интерфейс)
-def create_record(
-    student_id: int,
-    first_name: str,
-    second_name: str,
-    age: int,
-    sex: str,
-) -> StudentRecord:
-    """Совместимость со старым кодом"""
-    student_table = _DATABASE.get_student_table()
-    if not student_table:
-        _DATABASE.create_table("Student")
-        student_table = _DATABASE.get_student_table()
-    return student_table.create_record(student_id, first_name, second_name, age, sex)
-
-
-def select_record(
-    student_id: Optional[int] = None,
-    first_name: Optional[str] = None,
-    second_name: Optional[str] = None,
-    age: Optional[int] = None,
-    sex: Optional[str] = None,
-) -> List[StudentRecord]:
-    """Совместимость со старым кодом"""
-    student_table = _DATABASE.get_student_table()
-    if not student_table:
-        return []
-    return student_table.select_record(
-        student_id=student_id,
-        first_name=first_name,
-        second_name=second_name,
-        age=age,
-        sex=sex
-    )
-
-
-def update_record(
-    student_id: int,
-    first_name: Optional[str] = None,
-    second_name: Optional[str] = None,
-    age: Optional[int] = None,
-    sex: Optional[str] = None,
-) -> Optional[StudentRecord]:
-    """Совместимость со старым кодом"""
-    student_table = _DATABASE.get_student_table()
-    if not student_table:
-        return None
-    return student_table.update_record(
-        student_id,
-        first_name=first_name,
-        second_name=second_name,
-        age=age,
-        sex=sex
-    )
-
-
-def delete_record(student_id: int) -> bool:
-    """Совместимость со старым кодом"""
-    student_table = _DATABASE.get_student_table()
-    if not student_table:
-        return False
-    return student_table.delete_record(student_id)
-
-
-def create_table(table_name: str) -> bool:
-    """Совместимость со старым кодом"""
-    return _DATABASE.create_table(table_name)
-
-
-def list_tables() -> List[str]:
-    """Совместимость со старым кодом"""
-    return _DATABASE.list_tables()
-
-
-def get_table(table_name: str) -> Optional[Table]:
-    """Совместимость со старым кодом"""
-    return _DATABASE.get_table(table_name)
-
-
-def delete_table(table_name: str) -> bool:
-    """Совместимость со старым кодом"""
-    return _DATABASE.delete_table(table_name)
-
-
-# Для обратной совместимости с кодом, который обращается напрямую к Student
-def _get_student_list() -> List[StudentRecord]:
-    """Внутренняя функция для доступа к списку Student"""
-    student_table = _DATABASE.get_student_table()
-    if student_table:
-        return student_table._records
-    return []
-
-
-# Совместимость с кодом, который использует Student как список
-Student = _get_student_list()
-init_database = lambda: None  # Для совместимости
