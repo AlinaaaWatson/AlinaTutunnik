@@ -1,6 +1,6 @@
 """Backend для работы с таблицами в памяти"""
 from typing import Optional, List, Dict, Any
-from .errors import DuplicateIDError, InvalidAgeError, RecordNotFoundError
+from .errors import InvalidAgeError, RecordNotFoundError
 
 
 class Record:
@@ -23,9 +23,8 @@ class Record:
     def __setitem__(self, key: str, value: Any) -> None:
         """Позволяет устанавливать значение как record['field'] = value"""
         if key == 'id':
-            self.id = value
-        else:
-            self.data[key] = value
+            raise KeyError("ID записи нельзя изменить. Используйте метод update() таблицы.")
+        self.data[key] = value
     
     def __repr__(self) -> str:
         return f"Record(id={self.id}, data={self.data})"
@@ -155,16 +154,26 @@ class Table:
             
         Returns:
             Отсортированный список записей
+            
+        Raises:
+            TypeError: Если поле не подходит для сортировки
         """
         records = self.all()
         
         def get_key(record: Record) -> Any:
             if field == 'id':
                 return record.id
-            return record.data.get(field)
+            value = record.data.get(field)
+            if value is None:
+                return (2, None) if not reverse else (0, None)
+            if isinstance(value, (int, float)):
+                return (1, f"{value:020d}" if isinstance(value, int) else f"{value:020f}")
+            return (1, str(value))
         
-        return sorted(records, key=get_key, reverse=reverse)
-
+        try:
+            return sorted(records, key=get_key, reverse=reverse)
+        except TypeError as e:
+            raise TypeError(f"Не удалось отсортировать по полю '{field}': {e}")
 
 class StudentTable(Table):
     """Специализированная таблица для студентов с валидацией"""
