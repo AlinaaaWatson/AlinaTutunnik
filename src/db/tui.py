@@ -4,9 +4,6 @@ from typing import Optional, Dict, Any, List
 import sys
 import os
 
-# Добавляем корневую директорию в путь для корректных импортов
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from src.db.backend.memory import Database, Table, Record
 from src.db.backend.errors import InvalidAgeError, RecordNotFoundError, FileDatabaseError
 from src.db.backend.memory import Database as InMemoryDatabase

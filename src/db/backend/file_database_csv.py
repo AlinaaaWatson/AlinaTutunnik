@@ -4,7 +4,7 @@ import os
 import csv
 from typing import Optional, List, Dict, Any, Set
 from .memory import Table, StudentTable, Record, Database
-from .errors import DatabaseError, FileDatabaseError
+from .errors import FileDatabaseError, InvalidAgeError, RecordNotFoundError
 
 
 class CSVTable(Table):
@@ -44,7 +44,6 @@ class CSVTable(Table):
             with open(self._file_path, 'r', encoding='utf-8', newline='') as f:
                 reader = csv.DictReader(f)
                 
-                # Сохраняем заголовки
                 if reader.fieldnames:
                     self._headers = set(reader.fieldnames)
                 
@@ -53,12 +52,10 @@ class CSVTable(Table):
                 
                 for row in reader:
                     try:
-                        # Извлекаем ID из данных
                         record_id = int(row.get('id', 0))
                         if record_id == 0:
                             continue
                         
-                        # Восстанавливаем данные (без поля id)
                         data = {k: self._parse_value(v) for k, v in row.items() if k != 'id'}
                         
                         record = Record(record_id, data)
@@ -83,7 +80,6 @@ class CSVTable(Table):
         if not value:
             return None
         
-        # Пробуем преобразовать в число
         try:
             if '.' in value:
                 return float(value)
@@ -91,7 +87,6 @@ class CSVTable(Table):
         except ValueError:
             pass
         
-        # Булевы значения
         if value.lower() == 'true':
             return True
         if value.lower() == 'false':
@@ -111,24 +106,29 @@ class CSVTable(Table):
             self._headers.add(key)
     
     def _save_to_file(self) -> None:
-        """Сохраняет данные таблицы в CSV-файл"""
+        """Сохраняет данные таблицы в CSV-файл с атомарной записью"""
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             
-            # Формируем список всех полей (включая id)
             all_fields = ['id'] + sorted([h for h in self._headers if h != 'id'])
             
-            with open(self._file_path, 'w', encoding='utf-8', newline='') as f:
+            # ВРЕМЕННЫЙ ФАЙЛ для атомарной записи
+            temp_file = self._file_path + '.tmp'
+            
+            # Записываем во временный файл
+            with open(temp_file, 'w', encoding='utf-8', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=all_fields)
                 writer.writeheader()
                 
                 for record in self._records.values():
                     row = {'id': record.id}
                     row.update(record.data)
-                    # Преобразуем все значения в строки
                     row = {k: self._format_value(v) for k, v in row.items()}
                     writer.writerow(row)
-                    
+            
+            # АТОМАРНАЯ ЗАМЕНА (только после успешной записи)
+            os.replace(temp_file, self._file_path)
+            
         except PermissionError as e:
             raise FileDatabaseError(f"Нет доступа к файлу {self._file_path}: {e}")
         except OSError as e:
@@ -138,25 +138,41 @@ class CSVTable(Table):
     
     def insert(self, data: Dict[str, Any]) -> Record:
         self._update_headers(data)
-        record = Record(self._next_id, data)
-        self._records[self._next_id] = record
-        self._next_id += 1
-        self._save_to_file()
-        return record
+        new_id = self._next_id
+        record = Record(new_id, data.copy())
+        
+        old_records = self._records.copy()
+        old_next_id = self._next_id
+        
+        try:
+            self._records[new_id] = record
+            self._next_id = new_id + 1
+            self._save_to_file()
+            return record
+        except Exception as e:
+            self._records = old_records
+            self._next_id = old_next_id
+            raise FileDatabaseError(f"Ошибка сохранения записи: {e}")
     
     def get(self, record_id: int) -> Optional[Record]:
         return self._records.get(record_id)
     
     def update(self, record_id: int, data: Dict[str, Any]) -> Record:
+        """Обновляет запись с откатом при ошибке"""
         if record_id not in self._records:
-            from .errors import RecordNotFoundError
             raise RecordNotFoundError(f"Запись с ID {record_id} не найдена")
         
         self._update_headers(data)
         record = self._records[record_id]
-        record.data.update(data)
-        self._save_to_file()
-        return record
+        old_data = record.data.copy()
+        
+        try:
+            record.data.update(data)
+            self._save_to_file()
+            return record
+        except Exception as e:
+            record.data = old_data
+            raise FileDatabaseError(f"Ошибка обновления записи: {e}")
     
     def delete(self, record_id: int) -> bool:
         if record_id in self._records:
@@ -204,11 +220,9 @@ class CSVStudentTable(StudentTable, CSVTable):
         CSVTable.__init__(self, "Student", data_dir)
     
     def insert(self, data: Dict[str, Any]) -> Record:
-        # Валидация возраста
         if 'age' in data:
             age = data['age']
             if not isinstance(age, int) or age < 0 or age > 150:
-                from .errors import InvalidAgeError
                 raise InvalidAgeError(f"Некорректный возраст: {age}")
         return super().insert(data)
     
@@ -216,16 +230,11 @@ class CSVStudentTable(StudentTable, CSVTable):
         if 'age' in data:
             age = data['age']
             if not isinstance(age, int) or age < 0 or age > 150:
-                from .errors import InvalidAgeError
                 raise InvalidAgeError(f"Некорректный возраст: {age}")
         return super().update(record_id, data)
 
 
 class CSVDatabase(Database):
-    """
-    CSV-база данных, сохраняющая все таблицы на диск в формате CSV.
-    Реализует тот же интерфейс, что и FileDatabase и InMemoryDatabase.
-    """
     
     def __init__(self, data_dir: str = "data_csv"):
         self.data_dir = data_dir
@@ -246,7 +255,6 @@ class CSVDatabase(Database):
         return table_name == "Student"
     
     def _load_all_tables(self) -> None:
-        """Загружает все таблицы из CSV-файлов"""
         if not os.path.exists(self.data_dir):
             return
         
@@ -262,7 +270,6 @@ class CSVDatabase(Database):
                     print(f"Предупреждение: не удалось загрузить таблицу {table_name}: {e}")
     
     def create_table(self, table_name: str) -> CSVTable:
-        """Создаёт новую таблицу в CSV-формате"""
         table_name = table_name.strip()
         
         if not table_name:
@@ -286,7 +293,6 @@ class CSVDatabase(Database):
         return list(self._tables.keys())
     
     def drop_table(self, table_name: str) -> bool:
-        """Удаляет таблицу и её CSV-файл"""
         if table_name not in self._tables:
             return False
         
@@ -301,6 +307,5 @@ class CSVDatabase(Database):
         return True
     
     def save_all(self) -> None:
-        """Сохраняет все таблицы"""
         for table in self._tables.values():
             table._save_to_file()

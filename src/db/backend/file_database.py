@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Optional, List, Dict, Any
 from .memory import Table, StudentTable, Record, Database
-from .errors import DatabaseError, FileDatabaseError, RecordNotFoundError
+from .errors import FileDatabaseError, RecordNotFoundError, InvalidAgeError
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -23,29 +23,23 @@ class FileTable(Table):
         self._load_from_file()
     
     def __len__(self) -> int:
-        """Поддержка len(table)"""
         return len(self._records)
     
     def __iter__(self):
-        """Поддержка итерации по таблице"""
         return iter(self._records.values())
     
     def all(self) -> List[Record]:
-        """Вернуть все записи"""
         return list(self._records.values())
     
     def count(self) -> int:
-        """Вернуть количество записей"""
         return len(self._records)
     
     def _get_file_path(self) -> str:
-        """Возвращает путь к файлу таблицы"""
         return self._file_path
     
     def _load_from_file(self) -> None:
         """Загружает данные таблицы из JSON-файла с обработкой ошибок"""
         if not os.path.exists(self._file_path):
-            # Создаём пустой файл, если его нет
             self._save_to_file()
             return
         
@@ -53,7 +47,6 @@ class FileTable(Table):
             with open(self._file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Проверка структуры данных
             if not isinstance(data, dict):
                 raise FileDatabaseError(f"Некорректная структура файла {self._file_path}: ожидался словарь")
             
@@ -63,7 +56,6 @@ class FileTable(Table):
             if not isinstance(data['records'], list):
                 raise FileDatabaseError(f"Некорректный формат файла {self._file_path}: 'records' должен быть списком")
             
-            # Восстанавливаем записи
             self._records.clear()
             for record_data in data.get('records', []):
                 try:
@@ -78,7 +70,6 @@ class FileTable(Table):
             self._next_id = data.get('next_id', max(self._records.keys()) + 1 if self._records else 1)
             
         except json.JSONDecodeError as e:
-            # При повреждённом JSON создаём пустую таблицу
             logger.warning(f"Ошибка чтения JSON из файла {self._file_path}: {e}. Создана пустая таблица.")
             self._records.clear()
             self._next_id = 1
@@ -89,11 +80,10 @@ class FileTable(Table):
             raise FileDatabaseError(f"Ошибка загрузки таблицы {self.name}: {e}")
     
     def _save_to_file(self) -> None:
-        """Сохраняет данные таблицы в JSON-файл с обработкой ошибок"""
+        """Сохраняет данные таблицы в JSON-файл с атомарной записью"""
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             
-            # Проверка прав на запись
             if os.path.exists(self._file_path) and not os.access(self._file_path, os.W_OK):
                 raise FileDatabaseError(f"Нет прав на запись в файл {self._file_path}")
             
@@ -106,12 +96,10 @@ class FileTable(Table):
                 ]
             }
             
-            # Временный файл для атомарной записи
             temp_file = self._file_path + '.tmp'
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
             
-            # Замена временного файла
             os.replace(temp_file, self._file_path)
                 
         except FileDatabaseError:
@@ -124,23 +112,27 @@ class FileTable(Table):
             raise FileDatabaseError(f"Ошибка сохранения таблицы {self.name}: {e}")
     
     def insert(self, data: Dict[str, Any]) -> Record:
-        record = Record(self._next_id, data)
-        self._records[self._next_id] = record
-        self._next_id += 1
-        self._save_to_file()
-        return record
+        new_id = self._next_id
+        record = Record(new_id, data.copy())
+        
+        old_records = self._records.copy()
+        old_next_id = self._next_id
+        
+        try:
+            self._records[new_id] = record
+            self._next_id = new_id + 1
+            self._save_to_file()
+            return record
+        except Exception as e:
+            self._records = old_records
+            self._next_id = old_next_id
+            raise FileDatabaseError(f"Ошибка сохранения записи: {e}")
     
     def get(self, record_id: int) -> Optional[Record]:
         return self._records.get(record_id)
     
     def update(self, record_id: int, data: Dict[str, Any]) -> Record:
-        if record_id not in self._records:
-            raise RecordNotFoundError(f"Запись с ID {record_id} не найдена")
-        
-        record = self._records[record_id]
-        record.data.update(data)
-        self._save_to_file()
-        return record
+        return super().update(record_id, data)
     
     def delete(self, record_id: int) -> bool:
         if record_id in self._records:
@@ -167,19 +159,6 @@ class FileTable(Table):
         return results
     
     def sort(self, field: str, reverse: bool = False) -> List[Record]:
-        """
-        Сортировка записей по полю с обработкой отсутствующих полей
-        
-        Args:
-            field: Имя поля для сортировки (или 'id' для сортировки по ID)
-            reverse: False - по возрастанию, True - по убыванию
-            
-        Returns:
-            Отсортированный список записей
-            
-        Raises:
-            TypeError: Если поле не подходит для сортировки
-        """
         records = self.all()
         
         def get_key(record: Record) -> Any:
@@ -203,7 +182,6 @@ class FileStudentTable(StudentTable, FileTable):
         if 'age' in data:
             age = data['age']
             if not isinstance(age, int) or age < 0 or age > 150:
-                from .errors import InvalidAgeError
                 raise InvalidAgeError(f"Некорректный возраст: {age}")
         return super().insert(data)
     
@@ -211,16 +189,12 @@ class FileStudentTable(StudentTable, FileTable):
         if 'age' in data:
             age = data['age']
             if not isinstance(age, int) or age < 0 or age > 150:
-                from .errors import InvalidAgeError
                 raise InvalidAgeError(f"Некорректный возраст: {age}")
         return super().update(record_id, data)
 
 
 class FileDatabase(Database):
-    """
-    Файловая база данных, сохраняющая все таблицы на диск в формате JSON.
-    Реализует тот же интерфейс, что и InMemoryDatabase (Database).
-    """
+    """Файловая база данных, сохраняющая таблицы на диск в формате JSON"""
     
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
