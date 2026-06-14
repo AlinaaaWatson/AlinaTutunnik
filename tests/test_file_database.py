@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.db.backend.file_database import FileDatabase, FileTable, FileStudentTable
-from src.db.backend.errors import FileDatabaseError, InvalidAgeError, RecordNotFoundError
+from src.db.backend.errors import InvalidAgeError, RecordNotFoundError
 
 
 class TestFileDatabaseMinimal(unittest.TestCase):
@@ -49,7 +49,6 @@ class TestFileDatabaseMinimal(unittest.TestCase):
 
 
 class TestFileDatabaseCoverage(unittest.TestCase):
-    """Тесты для поднятия покрытия file_database.py"""
     
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -127,7 +126,6 @@ class TestFileDatabaseCoverage(unittest.TestCase):
         sorted_by_age_desc = table.sort("age", reverse=True)
         self.assertEqual([r.data["age"] for r in sorted_by_age_desc], [30, 25, 20])
         
-        # Пустая таблица
         empty_table = FileTable("EmptySort", self.temp_dir)
         self.assertEqual(empty_table.sort("any"), [])
     
@@ -249,6 +247,15 @@ class TestFileDatabaseCoverage(unittest.TestCase):
         self.assertEqual(len(table), 0)
         self.assertEqual(table._next_id, 1)
 
+    def test_update_persistence_after_reload(self):
+        """Тест: update сохраняется после перезагрузки"""
+        table1 = FileTable("UpdatePersistTest", self.temp_dir)
+        table1.insert({"name": "John", "age": 20})
+        table1.update(1, {"age": 25})
+        
+        table2 = FileTable("UpdatePersistTest", self.temp_dir)
+        record = table2.get(1)
+        self.assertEqual(record.data["age"], 25)
 
 if __name__ == "__main__":
     unittest.main()

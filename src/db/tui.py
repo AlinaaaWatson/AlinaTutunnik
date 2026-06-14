@@ -1,8 +1,6 @@
 """Текстовый пользовательский интерфейс"""
 
 from typing import Optional, Dict, Any, List
-import sys
-import os
 
 from src.db.backend.memory import Database, Table, Record
 from src.db.backend.errors import InvalidAgeError, RecordNotFoundError, FileDatabaseError

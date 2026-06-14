@@ -7,7 +7,6 @@ from typing import Optional, List, Dict, Any
 from .memory import Table, StudentTable, Record, Database
 from .errors import FileDatabaseError, RecordNotFoundError, InvalidAgeError
 
-# Настройка логирования
 logger = logging.getLogger(__name__)
 
 
@@ -84,12 +83,14 @@ class FileTable(Table):
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             
-            if os.path.exists(self._file_path) and not os.access(self._file_path, os.W_OK):
-                raise FileDatabaseError(f"Нет прав на запись в файл {self._file_path}")
+            all_fields = set()
+            for record in self._records.values():
+                all_fields.update(record.data.keys())
             
             data = {
                 'name': self.name,
                 'next_id': self._next_id,
+                'fields': list(all_fields),
                 'records': [
                     {'id': record.id, 'data': record.data}
                     for record in self._records.values()
@@ -132,7 +133,19 @@ class FileTable(Table):
         return self._records.get(record_id)
     
     def update(self, record_id: int, data: Dict[str, Any]) -> Record:
-        return super().update(record_id, data)
+        if record_id not in self._records:
+            raise RecordNotFoundError(f"Запись с ID {record_id} не найдена")
+        
+        record = self._records[record_id]
+        old_data = record.data.copy()
+        
+        try:
+            record.data.update(data)
+            self._save_to_file() 
+            return record
+        except Exception as e:
+            record.data = old_data
+            raise FileDatabaseError(f"Ошибка обновления записи: {e}")
     
     def delete(self, record_id: int) -> bool:
         if record_id in self._records:
