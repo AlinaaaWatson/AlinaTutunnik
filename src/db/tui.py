@@ -1,12 +1,43 @@
 """Текстовый пользовательский интерфейс"""
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from typing import Optional, Dict, Any, List
-from db.backend.memory import Database, Table, Record
-from db.backend.errors import InvalidAgeError, RecordNotFoundError
+
+from src.db.backend.memory import Database, Table, Record
+from src.db.backend.errors import InvalidAgeError, RecordNotFoundError, FileDatabaseError
+from src.db.backend.memory import Database as InMemoryDatabase
+from src.db.backend.file_database import FileDatabase
+from src.db.backend.file_database_csv import CSVDatabase
+
+
+def parse_user_input(value: str) -> Any:
+    """
+    Преобразует строку пользователя в нужный тип (int/float/str/None/bool)
+    
+    Примеры:
+        "42" -> 42
+        "3.14" -> 3.14
+        "" -> None
+        "true" -> True
+        "false" -> False
+        "строка" -> "строка"
+    """
+    value = value.strip()
+    if not value:
+        return None
+    
+    if value.lower() == 'true':
+        return True
+    if value.lower() == 'false':
+        return False
+    
+    try:
+        if '.' in value:
+            return float(value)
+        return int(value)
+    except ValueError:
+        pass
+    
+    return value
 
 
 class ConsoleUI:
@@ -90,14 +121,7 @@ class ConsoleUI:
             if '=' in entry:
                 key, value = entry.split('=', 1)
                 key = key.strip()
-                value = value.strip()
-                try:
-                    if '.' in value:
-                        value = float(value)
-                    else:
-                        value = int(value)
-                except ValueError:
-                    pass
+                value = parse_user_input(value.strip())
                 data[key] = value
             else:
                 print("Неверный формат! Используйте: поле=значение")
@@ -149,20 +173,16 @@ class ConsoleUI:
             if '=' in entry:
                 key, value = entry.split('=', 1)
                 key = key.strip()
-                value = value.strip()
-                try:
-                    if '.' in value:
-                        value = float(value)
-                    else:
-                        value = int(value)
-                except ValueError:
-                    pass
+                value = parse_user_input(value.strip())
                 criteria[key] = value
             else:
                 print("Неверный формат!")
-        results = self.current_table.find(**criteria) if criteria else self.current_table.all()
-        print(f"\nНайдено записей: {len(results)}")
-        self._print_records(results)
+        try:
+            results = self.current_table.find(**criteria) if criteria else self.current_table.all()
+            print(f"\nНайдено записей: {len(results)}")
+            self._print_records(results)
+        except Exception as exc:
+            print(f"✗ Ошибка при поиске: {exc}")
     
     def _update_record(self) -> None:
         if self.current_table is None:
@@ -181,13 +201,7 @@ class ConsoleUI:
         for key in existing.data.keys():
             value = input(f"  {key} (было: {existing.data[key]}) -> ").strip()
             if value:
-                try:
-                    if '.' in value:
-                        value = float(value)
-                    else:
-                        value = int(value)
-                except ValueError:
-                    pass
+                value = parse_user_input(value)
                 new_data[key] = value
         if not new_data:
             print("Нет изменений.")
@@ -282,10 +296,13 @@ class ConsoleUI:
         order = input("Выберите порядок: ").strip()
         reverse = (order == '2')
         
-        sorted_records = self.current_table.sort(field, reverse)
-        order_text = "возрастанию" if not reverse else "убыванию"
-        print(f"\nОтсортированные записи по полю '{field}' (по {order_text}):")
-        self._print_records(sorted_records)
+        try:
+            sorted_records = self.current_table.sort(field, reverse)
+            order_text = "возрастанию" if not reverse else "убыванию"
+            print(f"\nОтсортированные записи по полю '{field}' (по {order_text}):")
+            self._print_records(sorted_records)
+        except TypeError as exc:
+            print(f"✗ Ошибка сортировки: {exc}")
     
     def _clear_table(self) -> None:
         if self.current_table is None:
@@ -298,7 +315,39 @@ class ConsoleUI:
 
 
 def run() -> None:
-    db = Database()
+    """Запуск приложения с выбором типа БД и формата хранения"""
+    print("\nВыберите тип базы данных:")
+    print("1. In-Memory (данные не сохраняются)")
+    print("2. Файловая (JSON)")
+    print("3. Файловая (CSV)")
+    
+    choice = input("Ваш выбор (1/2/3): ").strip()
+    
+    try:
+        if choice == "2":
+            data_dir = input("Введите путь для хранения JSON (Enter для 'data'): ").strip()
+            if not data_dir:
+                data_dir = "data"
+            db = FileDatabase(data_dir=data_dir)
+            print(f"Используется файловая БД (JSON). Данные хранятся в: {data_dir}")
+        elif choice == "3":
+            data_dir = input("Введите путь для хранения CSV (Enter для 'data_csv'): ").strip()
+            if not data_dir:
+                data_dir = "data_csv"
+            db = CSVDatabase(data_dir=data_dir)
+            print(f"Используется файловая БД (CSV). Данные хранятся в: {data_dir}")
+        else:
+            db = InMemoryDatabase()
+            print("Используется in-memory БД. Данные НЕ сохранятся после выхода.")
+    except FileDatabaseError as e:
+        print(f"Ошибка при создании файловой БД: {e}")
+        print("Запуск с in-memory БД...")
+        db = InMemoryDatabase()
+    except Exception as e:
+        print(f"Неожиданная ошибка: {e}")
+        print("Запуск с in-memory БД...")
+        db = InMemoryDatabase()
+    
     ui = ConsoleUI(db)
     ui.run()
 
